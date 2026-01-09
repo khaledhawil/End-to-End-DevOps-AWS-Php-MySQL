@@ -1,0 +1,10 @@
+.terraform
+.terraform*
+*tfstate*
+*.tfvars
+.history
+.*pem
+.pem*
+k8s.pem
+.env
+*.env*

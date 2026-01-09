@@ -1,0 +1,42 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tms-ingress
+  namespace: tms-app
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - staging.task-manager.yourdomain.com
+      secretName: tms-staging-tls-cert
+  rules:
+    - host: staging.task-manager.yourdomain.com
+      http:
+        paths:
+          # Logout must come first (more specific)
+          - path: /pages/logout.php
+            pathType: Exact
+            backend:
+              service:
+                name: logout-service
+                port:
+                  number: 80
+          # All other /pages/* routes go to users-service
+          - path: /pages(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: users-service
+                port:
+                  number: 80
+          # Root and everything else goes to frontend
+          - path: /(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80

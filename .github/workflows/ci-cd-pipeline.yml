@@ -1,0 +1,434 @@
+name: CI/CD Pipeline - Service Change Detection
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'services/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'services/**'
+
+env:
+  DOCKER_REGISTRY: docker.io  # Change to your ECR URL for AWS ECR
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  AWS_REGION: us-east-1
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # Job 1: Detect which services have changed
+  detect-changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      auth-service: ${{ steps.filter.outputs.auth-service }}
+      task-service: ${{ steps.filter.outputs.task-service }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      nginx: ${{ steps.filter.outputs.nginx }}
+      any-change: ${{ steps.filter.outputs.any-change }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for service changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            auth-service:
+              - 'services/auth-service/**'
+            task-service:
+              - 'services/task-service/**'
+            frontend:
+              - 'services/frontend/**'
+            nginx:
+              - 'services/nginx/**'
+            any-change:
+              - 'services/**'
+
+      - name: Display detected changes
+        run: |
+          echo "🔍 Change Detection Results:"
+          echo "Auth Service Changed: ${{ steps.filter.outputs.auth-service }}"
+          echo "Task Service Changed: ${{ steps.filter.outputs.task-service }}"
+          echo "Frontend Changed: ${{ steps.filter.outputs.frontend }}"
+          echo "Nginx Changed: ${{ steps.filter.outputs.nginx }}"
+
+  # Job 2: Build and push Auth Service
+  build-auth-service:
+    name: Build Auth Service
+    needs: detect-changes
+    if: needs.detect-changes.outputs.auth-service == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Uncomment for AWS ECR
+      # - name: Configure AWS credentials
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: ${{ env.AWS_REGION }}
+      #
+      # - name: Login to Amazon ECR
+      #   id: login-ecr
+      #   uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Auth Service Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/auth-service
+          push: false
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-auth:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+
+      - name: Scan Auth Service image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-auth-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'  # Don't fail on vulnerabilities (change to 1 to fail)
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-auth-results.sarif'
+          category: 'auth-service'
+
+      - name: Push Auth Service image
+        run: |
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-auth:latest
+
+      - name: Save image tag for K8s update
+        run: |
+          mkdir -p artifacts
+          echo "${{ env.IMAGE_TAG }}" > artifacts/auth-service-tag.txt
+          echo "auth-service" > artifacts/auth-service-name.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-service-artifacts
+          path: artifacts/
+
+  # Job 3: Build and push Task Service
+  build-task-service:
+    name: Build Task Service
+    needs: detect-changes
+    if: needs.detect-changes.outputs.task-service == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Task Service Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/task-service
+          push: false
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-task:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+
+      - name: Scan Task Service image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-task-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-task-results.sarif'
+          category: 'task-service'
+
+      - name: Push Task Service image
+        run: |
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-task:latest
+
+      - name: Save image tag for K8s update
+        run: |
+          mkdir -p artifacts
+          echo "${{ env.IMAGE_TAG }}" > artifacts/task-service-tag.txt
+          echo "task-service" > artifacts/task-service-name.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-service-artifacts
+          path: artifacts/
+
+  # Job 4: Build and push Frontend
+  build-frontend:
+    name: Build Frontend
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Frontend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/frontend
+          push: false
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+
+      - name: Scan Frontend image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
+          category: 'frontend'
+
+      - name: Push Frontend image
+        run: |
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-frontend:latest
+
+      - name: Save image tag for K8s update
+        run: |
+          mkdir -p artifacts
+          echo "${{ env.IMAGE_TAG }}" > artifacts/frontend-tag.txt
+          echo "frontend" > artifacts/frontend-name.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-artifacts
+          path: artifacts/
+
+  # Job 5: Build and push Nginx
+  build-nginx:
+    name: Build Nginx
+    needs: detect-changes
+    if: needs.detect-changes.outputs.nginx == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Nginx Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/nginx
+          push: false
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-nginx:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+
+      - name: Scan Nginx image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+          format: 'sarif'
+          output: 'trivy-nginx-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-nginx-results.sarif'
+          category: 'nginx'
+
+      - name: Push Nginx image
+        run: |
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-nginx:latest
+
+      - name: Save image tag for K8s update
+        run: |
+          mkdir -p artifacts
+          echo "${{ env.IMAGE_TAG }}" > artifacts/nginx-tag.txt
+          echo "nginx" > artifacts/nginx-name.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-artifacts
+          path: artifacts/
+
+  # Job 6: Update K8s manifests with new image tags
+  update-k8s-manifests:
+    name: Update K8s Manifests
+    needs: [detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx]
+    if: |
+      always() && 
+      needs.detect-changes.outputs.any-change == 'true' &&
+      (needs.build-auth-service.result == 'success' || needs.build-auth-service.result == 'skipped') &&
+      (needs.build-task-service.result == 'success' || needs.build-task-service.result == 'skipped') &&
+      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
+      (needs.build-nginx.result == 'success' || needs.build-nginx.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Update K8s deployment files
+        run: |
+          echo "📝 Updating K8s manifests with new image tags..."
+          
+          # Function to update deployment file
+          update_deployment() {
+            local service=$1
+            local deployment_file=$2
+            local tag_file="artifacts/${service}-artifacts/${service}-tag.txt"
+            
+            if [ -f "$tag_file" ]; then
+              TAG=$(cat "$tag_file")
+              echo "Updating $service to tag: $TAG"
+              
+              # Update the image in the deployment file
+              sed -i "s|image: .*/${service}:.*|image: ${{ env.DOCKER_USERNAME }}/task-manager-${service}:${TAG}|g" "$deployment_file"
+              sed -i "s|image: task-manager:${service}|image: ${{ env.DOCKER_USERNAME }}/task-manager-${service}:${TAG}|g" "$deployment_file"
+              
+              echo "✅ Updated $deployment_file with new image tag"
+            else
+              echo "⏭️  Skipping $service (no changes detected)"
+            fi
+          }
+          
+          # Update each service that changed
+          update_deployment "auth" "k8s/base/users-deployment.yaml"
+          update_deployment "task" "k8s/base/logout-deployment.yaml"
+          update_deployment "frontend" "k8s/base/frontend-deployment.yaml"
+          
+          # Display changes
+          echo "📋 Changes made:"
+          git diff k8s/
+
+      - name: Commit and push K8s manifest changes
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          
+          git add k8s/
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update K8s manifests with new image tags [skip ci]
+            
+            - Auth Service: $(cat artifacts/auth-service-artifacts/auth-service-tag.txt 2>/dev/null || echo 'no change')
+            - Task Service: $(cat artifacts/task-service-artifacts/task-service-tag.txt 2>/dev/null || echo 'no change')
+            - Frontend: $(cat artifacts/frontend-artifacts/frontend-tag.txt 2>/dev/null || echo 'no change')
+            - Nginx: $(cat artifacts/nginx-artifacts/nginx-tag.txt 2>/dev/null || echo 'no change')
+            
+            Updated by GitHub Actions"
+            
+            git push
+            echo "✅ K8s manifests updated and pushed"
+          fi
+
+  # Job 7: Create summary
+  pipeline-summary:
+    name: Pipeline Summary
+    needs: [detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx, update-k8s-manifests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          echo "# 🚀 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 Change Detection" >> $GITHUB_STEP_SUMMARY
+          echo "- Auth Service: ${{ needs.detect-changes.outputs.auth-service == 'true' && '✅ Changed' || '⏭️ No changes' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Task Service: ${{ needs.detect-changes.outputs.task-service == 'true' && '✅ Changed' || '⏭️ No changes' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: ${{ needs.detect-changes.outputs.frontend == 'true' && '✅ Changed' || '⏭️ No changes' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Nginx: ${{ needs.detect-changes.outputs.nginx == 'true' && '✅ Changed' || '⏭️ No changes' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🏗️ Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Auth Service: ${{ needs.build-auth-service.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Task Service: ${{ needs.build-task-service.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: ${{ needs.build-frontend.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Nginx: ${{ needs.build-nginx.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 K8s Manifest Update" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ needs.update-k8s-manifests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Image Tags" >> $GITHUB_STEP_SUMMARY
+          echo "- Image Tag: \`${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Registry: \`${{ env.DOCKER_REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY

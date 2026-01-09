@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logout-service
+  namespace: tms-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logout-service
+  template:
+    metadata:
+      labels:
+        app: logout-service
+    spec:
+      containers:
+        - name: logout-service
+          image: task-manager:logout-service
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80

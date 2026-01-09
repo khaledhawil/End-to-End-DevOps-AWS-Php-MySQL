@@ -1,0 +1,34 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: task-management-system-production
+  namespace: flux-system
+spec:
+  interval: 30m0s
+  path: ./k8s/overlays/production
+  prune: false  # Safety: don't auto-delete resources in production
+  sourceRef:
+    kind: GitRepository
+    name: task-management-system
+  timeout: 10m0s
+  wait: true
+  retryInterval: 5m0s
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: frontend
+      namespace: tms-app
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: users-service
+      namespace: tms-app
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: logout-service
+      namespace: tms-app
+  postBuild:
+    substitute:
+      ENVIRONMENT: "production"
+  # Require manual approval for production changes
+  force: false

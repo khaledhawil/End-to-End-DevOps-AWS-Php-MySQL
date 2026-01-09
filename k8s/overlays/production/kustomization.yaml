@@ -1,0 +1,91 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tms-app
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+images:
+  - name: task-manager:frontend
+    newName: 301678011652.dkr.ecr.us-east-1.amazonaws.com/task-manager
+    newTag: frontend
+  - name: task-manager:users-service
+    newName: 301678011652.dkr.ecr.us-east-1.amazonaws.com/task-manager
+    newTag: users-service
+  - name: task-manager:logout-service
+    newName: 301678011652.dkr.ecr.us-east-1.amazonaws.com/task-manager
+    newTag: logout-service
+
+commonLabels:
+  environment: production
+
+replicas:
+  - name: frontend
+    count: 2
+  - name: users-service
+    count: 2
+  - name: logout-service
+    count: 2
+
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: ecr-registry-secret
+    target:
+      kind: Deployment
+      name: frontend
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: users-service
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: ecr-registry-secret
+    target:
+      kind: Deployment
+      name: users-service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: logout-service
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: ecr-registry-secret
+    target:
+      kind: Deployment
+      name: logout-service
+  # Use external RDS database
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: users-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: users-service
+                env:
+                  - name: DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: rds-endpoint
+                        key: endpoint
+    target:
+      kind: Deployment
+      name: users-service

@@ -1,0 +1,75 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tms-app
+
+resources:
+  - ../../base
+  - mysql-deployment.yaml
+  - mysql-service.yaml
+  - mysql-pvc.yaml
+  - secrets.yaml
+  - ingress.yaml
+
+images:
+  - name: task-manager:frontend
+    newName: 301678011652.dkr.ecr.us-east-1.amazonaws.com/task-manager
+    newTag: frontend-staging
+  - name: task-manager:users-service
+    newName: 301678011652.dkr.ecr.us-east-1.amazonaws.com/task-manager
+    newTag: users-service-staging
+  - name: task-manager:logout-service
+    newName: 301678011652.dkr.ecr.us-east-1.amazonaws.com/task-manager
+    newTag: logout-service-staging
+
+commonLabels:
+  environment: staging
+
+replicas:
+  - name: frontend
+    count: 1
+  - name: users-service
+    count: 1
+  - name: logout-service
+    count: 1
+
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: ecr-registry-secret
+    target:
+      kind: Deployment
+      name: frontend
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: users-service
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: ecr-registry-secret
+    target:
+      kind: Deployment
+      name: users-service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: logout-service
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: ecr-registry-secret
+    target:
+      kind: Deployment
+      name: logout-service
