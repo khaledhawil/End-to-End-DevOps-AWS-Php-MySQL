@@ -15,15 +15,15 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: logout-service
+                name: task-service
                 port:
                   number: 80
-          # All other /pages/* routes go to users-service
+          # All other /pages/* routes go to auth-service
           - path: /pages(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
               service:
-                name: users-service
+                name: auth-service
                 port:
                   number: 80
           # Root and everything else goes to frontend
