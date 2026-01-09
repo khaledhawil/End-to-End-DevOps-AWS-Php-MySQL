@@ -7,7 +7,7 @@ metadata:
 spec:
   interval: 1m0s
   ref:
-    branch: main
+    branch: master
   url: https://github.com/khaledhawil/End-to-End-DevOps-AWS-Php-MySQL
   # For private repos, add secretRef:
   # secretRef:
