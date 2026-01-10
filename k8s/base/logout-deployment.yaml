@@ -30,6 +30,11 @@ spec:
                 secretKeyRef:
                   name: db-username
                   key: username
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: db-password
+                  key: password
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
