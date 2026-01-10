@@ -3,41 +3,24 @@ kind: Ingress
 metadata:
   name: tms-ingress
   namespace: tms-app
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   ingressClassName: nginx
   rules:
     - http:
         paths:
-          # API routes (most specific first)
-          - path: /api/auth(/|$)(.*)
-            pathType: ImplementationSpecific
+          # API routes (no rewrite needed - pass as-is)
+          - path: /api/auth
+            pathType: Prefix
             backend:
               service:
                 name: auth-service
                 port:
                   number: 80
-          - path: /api/tasks(/|$)(.*)
-            pathType: ImplementationSpecific
+          - path: /api/tasks
+            pathType: Prefix
             backend:
               service:
                 name: task-service
-                port:
-                  number: 80
-          # Legacy /pages routes
-          - path: /pages/logout.php
-            pathType: Exact
-            backend:
-              service:
-                name: task-service
-                port:
-                  number: 80
-          - path: /pages(/|$)(.*)
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: auth-service
                 port:
                   number: 80
 ---
