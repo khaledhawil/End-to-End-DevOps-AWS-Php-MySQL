@@ -80,7 +80,7 @@ spec:
     ports:
     - protocol: TCP
       port: 8001
-  # Allow from ingress
+  # Allow from ingress (on service port, not container port)
   - from:
     - namespaceSelector:
         matchLabels:
@@ -89,6 +89,8 @@ spec:
         matchLabels:
           app.kubernetes.io/name: rke2-ingress-nginx
     ports:
+    - protocol: TCP
+      port: 80
     - protocol: TCP
       port: 8001
   egress:
@@ -132,7 +134,7 @@ spec:
     ports:
     - protocol: TCP
       port: 8002
-  # Allow from ingress
+  # Allow from ingress (on service port, not container port)
   - from:
     - namespaceSelector:
         matchLabels:
@@ -141,6 +143,8 @@ spec:
         matchLabels:
           app.kubernetes.io/name: rke2-ingress-nginx
     ports:
+    - protocol: TCP
+      port: 80
     - protocol: TCP
       port: 8002
   egress:
