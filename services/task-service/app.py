@@ -26,7 +26,7 @@ CORS(app,
 db_config = {
     "host": os.getenv("DB_HOST", "mysql"),
     "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "password"),
+    "password": os.getenv("DB_PASS", "password"),
     "database": os.getenv("DB_NAME", "task_manager"),
     "pool_name": "task_pool",
     "pool_size": 5
