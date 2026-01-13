@@ -22,8 +22,8 @@ images:
     newName: localhost:5000/task-manager
     newTag: logout-service
 
-commonLabels:
-  environment: local
+# Note: commonLabels removed because it adds labels to NetworkPolicy selectors,
+# breaking pod matching. Use patches to add labels to specific resources if needed.
 
 patches:
   - patch: |-
