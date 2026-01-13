@@ -5,7 +5,7 @@ metadata:
   name: task-management-system-local
   namespace: flux-system
 spec:
-  interval: 5m0s
+  interval: 1m0s
   path: ./k8s/overlays/local
   prune: true
   sourceRef:
