@@ -28,12 +28,112 @@ env:
   DOCKER_REGISTRY: docker.io  # Change to your ECR URL for AWS ECR
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   AWS_REGION: us-east-1
-  IMAGE_TAG: ${{ github.sha }}
+  VERSION_MAJOR: 1
+  VERSION_MINOR: 0
 
 jobs:
-  # Job 1: Detect which services have changed
+  # Job 0: Generate Version Number
+  generate-version:
+    name: Generate Version Number
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_tag: ${{ steps.version.outputs.version_tag }}
+    steps:
+      - name: Generate semantic version
+        id: version
+        run: |
+          # Generate version based on run number: MAJOR.MINOR.PATCH
+          MAJOR=${{ env.VERSION_MAJOR }}
+          MINOR=${{ env.VERSION_MINOR }}
+          PATCH=${{ github.run_number }}
+          
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_tag=v${VERSION}" >> $GITHUB_OUTPUT
+          
+          echo "Generated version: ${VERSION}"
+          echo "Version tag: v${VERSION}"
+
+  # Job 1: Pipeline Started Notification
+  pipeline-started:
+    name: Pipeline Started Notification
+    needs: generate-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Pipeline Started notification to Slack
+        continue-on-error: true
+        run: |
+          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            echo "⚠️  SLACK_WEBHOOK_URL secret not configured. Skipping Slack notification."
+            exit 0
+          fi
+          
+          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"blocks\": [
+                {
+                  \"type\": \"header\",
+                  \"text\": {
+                    \"type\": \"plain_text\",
+                    \"text\": \":rocket: CI/CD Pipeline Started\",
+                    \"emoji\": true
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"New pipeline execution started for *${{ github.repository }}*\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Branch*\\n\`${{ github.ref_name }}\`\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Triggered By*\\n${{ github.actor }}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Event*\\n${{ github.event_name }}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Workflow*\\n${{ github.workflow }}\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Commit:* <${{ github.event.repository.html_url }}/commit/${{ github.sha }}|\`${GITHUB_SHA:0:7}\`>\\n*Commit Message:* ${{ github.event.head_commit.message }}\\n*Version:* \`${{ needs.generate-version.outputs.version }}\`\\n*View Run:* <${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}|Click here>\"
+                  }
+                },
+                {
+                  \"type\": \"context\",
+                  \"elements\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"GitHub Actions • $(date -u +'%Y-%m-%d %H:%M:%S UTC')\"
+                    }
+                  ]
+                }
+              ]
+            }"
+          
+          echo "✅ Pipeline started notification sent"
+
+  # Job 2: Detect which services have changed
   detect-changes:
     name: Detect Changed Services
+    needs: [generate-version, pipeline-started]
     runs-on: ubuntu-latest
     outputs:
       auth-service: ${{ steps.filter.outputs.auth-service }}
@@ -69,12 +169,15 @@ jobs:
           echo "Frontend Changed: ${{ steps.filter.outputs.frontend }}"
           echo "Nginx Changed: ${{ steps.filter.outputs.nginx }}"
 
-  # Job 2: Build and push Auth Service
+  # Job 3: Build and push Auth Service
   build-auth-service:
     name: Build Auth Service
-    needs: detect-changes
+    needs: [generate-version, detect-changes]
     if: needs.detect-changes.outputs.auth-service == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.build-status.outputs.success }}
+      version: ${{ needs.generate-version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -101,23 +204,24 @@ jobs:
       #   uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Auth Service Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./services/auth-service
           push: false
           tags: |
-            ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ needs.generate-version.outputs.version }}
             ${{ env.DOCKER_USERNAME }}/task-manager-auth:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
-          provenance: true
-          sbom: true
+          provenance: false
+          sbom: false
 
       - name: Generate SBOM for Auth Service
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+          image: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ needs.generate-version.outputs.version }}
           format: spdx-json
           output-file: auth-sbom.spdx.json
 
@@ -133,7 +237,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ needs.generate-version.outputs.version }}
           format: 'sarif'
           output: 'trivy-auth-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -143,7 +247,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ needs.generate-version.outputs.version }}
           format: 'json'
           output: 'trivy-auth-results.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -177,7 +281,7 @@ jobs:
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             aquasec/trivy image --security-checks config \
-            ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ needs.generate-version.outputs.version }}
 
       - name: Upload Auth Service SBOM
         uses: actions/upload-artifact@v4
@@ -187,28 +291,39 @@ jobs:
           path: auth-sbom.spdx.json
 
       - name: Push Auth Service image
+        id: push
         run: |
-          docker push ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-auth:${{ needs.generate-version.outputs.version }}
           docker push ${{ env.DOCKER_USERNAME }}/task-manager-auth:latest
 
       - name: Save image tag for K8s update
         run: |
           mkdir -p artifacts
-          echo "${{ env.IMAGE_TAG }}" > artifacts/auth-service-tag.txt
+          echo "${{ needs.generate-version.outputs.version }}" > artifacts/auth-service-tag.txt
           echo "auth-service" > artifacts/auth-service-name.txt
+
+      - name: Mark build as successful
+        id: build-status
+        if: success()
+        run: |
+          echo "success=true" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: auth-service-artifacts
           path: artifacts/
 
-  # Job 3: Build and push Task Service
+  # Job 4: Build and push Task Service
   build-task-service:
     name: Build Task Service
-    needs: detect-changes
+    needs: [generate-version, detect-changes]
     if: needs.detect-changes.outputs.task-service == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.build-status.outputs.success }}
+      version: ${{ needs.generate-version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -223,22 +338,25 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build Task Service Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./services/task-service
           push: false
           tags: |
-            ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ needs.generate-version.outputs.version }}
             ${{ env.DOCKER_USERNAME }}/task-manager-task:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
+          provenance: false
+          sbom: false
 
       - name: Scan Task Service image with Trivy (SARIF)
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ needs.generate-version.outputs.version }}
           format: 'sarif'
           output: 'trivy-task-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -248,7 +366,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ needs.generate-version.outputs.version }}
           format: 'json'
           output: 'trivy-task-results.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -270,26 +388,39 @@ jobs:
           path: trivy-task-results.json
 
       - name: Push Task Service image
+        id: push
         run: |
-          docker push ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-task:${{ needs.generate-version.outputs.version }}
           docker push ${{ env.DOCKER_USERNAME }}/task-manager-task:latest
 
       - name: Save image tag for K8s update
         run: |
           mkdir -p artifacts
-          echo "${{ env.IMAGE_TAG }}" > artifacts/task-service-tag.txt
+          echo "${{ needs.generate-version.outputs.version }}" > artifacts/task-service-tag.txt
           echo "task-service" > artifacts/task-service-name.txt
+
+      - name: Mark build as successful
+        id: build-status
+        if: success()
+        run: |
+          echo "success=true" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: task-service-artifacts
           path: artifacts/
 
-  # Job 4: Build and push Frontend
+  # Job 5: Build and push Frontend
   build-frontend:
     name: Build Frontend
-    needs: detect-changes
+    needs: [generate-version, detect-changes]
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.build-status.outputs.success }}
+      version: ${{ needs.generate-version.outputs.version }}
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -306,22 +437,25 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build Frontend Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./services/frontend
           push: false
           tags: |
-            ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ needs.generate-version.outputs.version }}
             ${{ env.DOCKER_USERNAME }}/task-manager-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
+          provenance: false
+          sbom: false
 
       - name: Scan Frontend image with Trivy (SARIF)
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ needs.generate-version.outputs.version }}
           format: 'sarif'
           output: 'trivy-frontend-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -331,7 +465,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ needs.generate-version.outputs.version }}
           format: 'json'
           output: 'trivy-frontend-results.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -353,28 +487,39 @@ jobs:
           path: trivy-frontend-results.json
 
       - name: Push Frontend image
+        id: push
         run: |
-          docker push ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-frontend:${{ needs.generate-version.outputs.version }}
           docker push ${{ env.DOCKER_USERNAME }}/task-manager-frontend:latest
 
       - name: Save image tag for K8s update
         run: |
           mkdir -p artifacts
-          echo "${{ env.IMAGE_TAG }}" > artifacts/frontend-tag.txt
+          echo "${{ needs.generate-version.outputs.version }}" > artifacts/frontend-tag.txt
           echo "frontend" > artifacts/frontend-name.txt
+
+      - name: Mark build as successful
+        id: build-status
+        if: success()
+        run: |
+          echo "success=true" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: frontend-artifacts
           path: artifacts/
 
-  # Job 5: Build and push Nginx
+  # Job 6: Build and push Nginx
   build-nginx:
     name: Build Nginx
-    needs: detect-changes
+    needs: [generate-version, detect-changes]
     if: needs.detect-changes.outputs.nginx == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.build-status.outputs.success }}
+      version: ${{ needs.generate-version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -389,22 +534,25 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build Nginx Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./services/nginx
           push: false
           tags: |
-            ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ needs.generate-version.outputs.version }}
             ${{ env.DOCKER_USERNAME }}/task-manager-nginx:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
+          provenance: false
+          sbom: false
 
       - name: Scan Nginx image with Trivy (SARIF)
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ needs.generate-version.outputs.version }}
           format: 'sarif'
           output: 'trivy-nginx-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -414,7 +562,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ needs.generate-version.outputs.version }}
           format: 'json'
           output: 'trivy-nginx-results.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -436,26 +584,34 @@ jobs:
           path: trivy-nginx-results.json
 
       - name: Push Nginx image
+        id: push
         run: |
-          docker push ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKER_USERNAME }}/task-manager-nginx:${{ needs.generate-version.outputs.version }}
           docker push ${{ env.DOCKER_USERNAME }}/task-manager-nginx:latest
 
       - name: Save image tag for K8s update
         run: |
           mkdir -p artifacts
-          echo "${{ env.IMAGE_TAG }}" > artifacts/nginx-tag.txt
+          echo "${{ needs.generate-version.outputs.version }}" > artifacts/nginx-tag.txt
           echo "nginx" > artifacts/nginx-name.txt
+
+      - name: Mark build as successful
+        id: build-status
+        if: success()
+        run: |
+          echo "success=true" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: nginx-artifacts
           path: artifacts/
 
-  # Job 6: Collect vulnerabilities and send notifications
+  # Job 7: Collect vulnerabilities and send notifications
   vulnerability-notification:
     name: Vulnerability Notification
-    needs: [detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx]
+    needs: [generate-version, detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx]
     if: |
       always() && 
       needs.detect-changes.outputs.any-change == 'true' &&
@@ -574,54 +730,89 @@ jobs:
           # Determine severity color
           if [ "${{ steps.parse-vulns.outputs.total_critical }}" -gt 0 ]; then
             COLOR="danger"
-            EMOJI="🔴"
+            STATUS_ICON=":red_circle:"
           elif [ "${{ steps.parse-vulns.outputs.total_high }}" -gt 0 ]; then
             COLOR="warning"
-            EMOJI="🟠"
+            STATUS_ICON=":warning:"
           else
             COLOR="good"
-            EMOJI="🟡"
+            STATUS_ICON=":large_yellow_circle:"
           fi
+          
+          # Determine build services
+          SERVICES_BUILT=""
+          [ "${{ needs.detect-changes.outputs.auth-service }}" == "true" ] && SERVICES_BUILT="${SERVICES_BUILT}\n• Auth Service: ${{ needs.build-auth-service.result }}"
+          [ "${{ needs.detect-changes.outputs.task-service }}" == "true" ] && SERVICES_BUILT="${SERVICES_BUILT}\n• Task Service: ${{ needs.build-task-service.result }}"
+          [ "${{ needs.detect-changes.outputs.frontend }}" == "true" ] && SERVICES_BUILT="${SERVICES_BUILT}\n• Frontend: ${{ needs.build-frontend.result }}"
+          [ "${{ needs.detect-changes.outputs.nginx }}" == "true" ] && SERVICES_BUILT="${SERVICES_BUILT}\n• Nginx: ${{ needs.build-nginx.result }}"
           
           # Create Slack message
           curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
             -H 'Content-Type: application/json' \
             -d "{
-              \"attachments\": [
+              \"blocks\": [
                 {
-                  \"color\": \"$COLOR\",
-                  \"title\": \"$EMOJI Security Vulnerabilities Detected\",
-                  \"text\": \"Security scan found vulnerabilities in *${{ github.repository }}*\",
+                  \"type\": \"header\",
+                  \"text\": {
+                    \"type\": \"plain_text\",
+                    \"text\": \"$STATUS_ICON Security Vulnerabilities Detected\",
+                    \"emoji\": true
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"Security vulnerabilities found in *${{ github.repository }}*\\n\\n*Services Built:*${SERVICES_BUILT}\"
+                  }
+                },
+                {
+                  \"type\": \"divider\"
+                },
+                {
+                  \"type\": \"section\",
                   \"fields\": [
                     {
-                      \"title\": \"Critical\",
-                      \"value\": \"${{ steps.parse-vulns.outputs.total_critical }}\",
-                      \"short\": true
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*:red_circle: Critical*\\n${{ steps.parse-vulns.outputs.total_critical }}\"
                     },
                     {
-                      \"title\": \"High\",
-                      \"value\": \"${{ steps.parse-vulns.outputs.total_high }}\",
-                      \"short\": true
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*:orange_circle: High*\\n${{ steps.parse-vulns.outputs.total_high }}\"
                     },
                     {
-                      \"title\": \"Medium\",
-                      \"value\": \"${{ steps.parse-vulns.outputs.total_medium }}\",
-                      \"short\": true
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*:yellow_circle: Medium*\\n${{ steps.parse-vulns.outputs.total_medium }}\"
                     },
                     {
-                      \"title\": \"Branch\",
-                      \"value\": \"${{ github.ref_name }}\",
-                      \"short\": true
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Branch*\\n\`${{ github.ref_name }}\`\"
                     },
                     {
-                      \"title\": \"Commit\",
-                      \"value\": \"<${{ github.event.repository.html_url }}/commit/${{ github.sha }}|${{ github.sha }}>\",
-                      \"short\": false
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Triggered By*\\n${{ github.actor }}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Workflow*\\n${{ github.workflow }}\"
                     }
-                  ],
-                  \"footer\": \"GitHub Actions\",
-                  \"footer_icon\": \"https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png\",
-                  \"ts\": $(date +%s)
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Commit:* <${{ github.event.repository.html_url }}/commit/${{ github.sha }}|\`${{ github.sha }}\`>\\n*View Run:* <${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}|Click here>\"
+                  }
+                },
+                {
+                  \"type\": \"context\",
+                  \"elements\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"GitHub Actions • $(date -u +'%Y-%m-%d %H:%M:%S UTC')\"
+                    }
+                  ]
                 }
               ]
             }"
@@ -651,17 +842,17 @@ jobs:
           name: vulnerability-report
           path: vulnerability-report.md
 
-  # Job 7: Update K8s manifests with new image tags
+  # Job 8: Update K8s manifests with new image tags
   update-k8s-manifests:
     name: Update K8s Manifests
-    needs: [detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx, vulnerability-notification]
+    needs: [generate-version, detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx, vulnerability-notification]
     if: |
       always() && 
       needs.detect-changes.outputs.any-change == 'true' &&
-      (needs.build-auth-service.result == 'success' || needs.build-auth-service.result == 'skipped') &&
-      (needs.build-task-service.result == 'success' || needs.build-task-service.result == 'skipped') &&
-      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
-      (needs.build-nginx.result == 'success' || needs.build-nginx.result == 'skipped')
+      (needs.build-auth-service.result == 'success' || 
+       needs.build-task-service.result == 'success' || 
+       needs.build-frontend.result == 'success' || 
+       needs.build-nginx.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -671,40 +862,54 @@ jobs:
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           path: artifacts/
 
       - name: Update K8s deployment files
         run: |
-          echo "📝 Updating K8s manifests with new image tags..."
+          echo "📝 Updating K8s manifests with new image tags (only successful builds)..."
           
-          # Function to update deployment file
+          UPDATED_SERVICES=""
+          
+          # Function to update deployment file - only if build succeeded
           update_deployment() {
             local service=$1
             local deployment_file=$2
+            local build_result=$3
             local tag_file="artifacts/${service}-artifacts/${service}-tag.txt"
             
-            if [ -f "$tag_file" ]; then
+            # Only update if build succeeded
+            if [ "$build_result" == "success" ] && [ -f "$tag_file" ]; then
               TAG=$(cat "$tag_file")
-              echo "Updating $service to tag: $TAG"
+              echo "✅ Updating $service to tag: $TAG (build succeeded)"
               
               # Update the image in the deployment file
-              sed -i "s|image: .*/task-manager-${service}:.*|image: ${{ env.DOCKER_USERNAME }}/task-manager-${service}:${TAG}|g" "$deployment_file"
+              sed -i "s|image: .*/task-manager-${service#auth-}:.*|image: ${{ env.DOCKER_USERNAME }}/task-manager-${service#auth-}:${TAG}|g" "$deployment_file"
               
               echo "✅ Updated $deployment_file with new image tag"
+              UPDATED_SERVICES="${UPDATED_SERVICES}${service}:${TAG}\n"
             else
-              echo "⏭️  Skipping $service (no changes detected)"
+              if [ "$build_result" == "failure" ]; then
+                echo "❌ Skipping $service (build failed - keeping existing tag)"
+              else
+                echo "⏭️  Skipping $service (no changes detected)"
+              fi
             fi
           }
           
-          # Update each service that changed
-          update_deployment "auth" "k8s/base/users-deployment.yaml"
-          update_deployment "task" "k8s/base/logout-deployment.yaml"
-          update_deployment "frontend" "k8s/base/frontend-deployment.yaml"
+          # Update each service based on build result
+          update_deployment "auth" "k8s/base/users-deployment.yaml" "${{ needs.build-auth-service.result }}"
+          update_deployment "task" "k8s/base/logout-deployment.yaml" "${{ needs.build-task-service.result }}"
+          update_deployment "frontend" "k8s/base/frontend-deployment.yaml" "${{ needs.build-frontend.result }}"
           
           # Display changes
+          echo ""
           echo "📋 Changes made:"
           git diff k8s/
+          
+          # Save updated services for commit message
+          echo -e "$UPDATED_SERVICES" > /tmp/updated-services.txt
 
       - name: Commit and push K8s manifest changes
         run: |
@@ -716,23 +921,33 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update K8s manifests with new image tags [skip ci]
+            # Build commit message with only successful builds
+            COMMIT_MSG="chore: update K8s manifests with new image tags [skip ci]\n\nVersion: ${{ needs.generate-version.outputs.version }}\n\n"
             
-            - Auth Service: $(cat artifacts/auth-service-artifacts/auth-service-tag.txt 2>/dev/null || echo 'no change')
-            - Task Service: $(cat artifacts/task-service-artifacts/task-service-tag.txt 2>/dev/null || echo 'no change')
-            - Frontend: $(cat artifacts/frontend-artifacts/frontend-tag.txt 2>/dev/null || echo 'no change')
-            - Nginx: $(cat artifacts/nginx-artifacts/nginx-tag.txt 2>/dev/null || echo 'no change')
+            if [ "${{ needs.build-auth-service.result }}" == "success" ]; then
+              COMMIT_MSG="${COMMIT_MSG}- Auth Service: ${{ needs.build-auth-service.outputs.version }}\n"
+            fi
+            if [ "${{ needs.build-task-service.result }}" == "success" ]; then
+              COMMIT_MSG="${COMMIT_MSG}- Task Service: ${{ needs.build-task-service.outputs.version }}\n"
+            fi
+            if [ "${{ needs.build-frontend.result }}" == "success" ]; then
+              COMMIT_MSG="${COMMIT_MSG}- Frontend: ${{ needs.build-frontend.outputs.version }}\n"
+            fi
+            if [ "${{ needs.build-nginx.result }}" == "success" ]; then
+              COMMIT_MSG="${COMMIT_MSG}- Nginx: ${{ needs.build-nginx.outputs.version }}\n"
+            fi
             
-            Updated by GitHub Actions"
+            COMMIT_MSG="${COMMIT_MSG}\nUpdated by GitHub Actions"
             
+            echo -e "$COMMIT_MSG" | git commit -F -
             git push
             echo "✅ K8s manifests updated and pushed"
           fi
 
-  # Job 8: Create summary
+  # Job 9: Create summary
   pipeline-summary:
     name: Pipeline Summary
-    needs: [detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx, vulnerability-notification, update-k8s-manifests]
+    needs: [generate-version, pipeline-started, detect-changes, build-auth-service, build-task-service, build-frontend, build-nginx, vulnerability-notification, update-k8s-manifests]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -752,12 +967,150 @@ jobs:
           echo "- Frontend: ${{ needs.build-frontend.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Nginx: ${{ needs.build-nginx.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## � Security Scan" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔒 Security Scan" >> $GITHUB_STEP_SUMMARY
           echo "- Vulnerability Check: ${{ needs.vulnerability-notification.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## �📦 K8s Manifest Update" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 K8s Manifest Update" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ needs.update-k8s-manifests.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📋 Image Tags" >> $GITHUB_STEP_SUMMARY
-          echo "- Image Tag: \`${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Version & Registry" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: \`${{ needs.generate-version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Registry: \`${{ env.DOCKER_REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Determine Pipeline Status
+        id: status
+        run: |
+          # Check if any critical job failed
+          if [ "${{ needs.build-auth-service.result }}" == "failure" ] || \
+             [ "${{ needs.build-task-service.result }}" == "failure" ] || \
+             [ "${{ needs.build-frontend.result }}" == "failure" ] || \
+             [ "${{ needs.build-nginx.result }}" == "failure" ] || \
+             [ "${{ needs.update-k8s-manifests.result }}" == "failure" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "status_icon=:x:" >> $GITHUB_OUTPUT
+            echo "status_text=Failed" >> $GITHUB_OUTPUT
+            echo "color=danger" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "status_icon=:white_check_mark:" >> $GITHUB_OUTPUT
+            echo "status_text=Successful" >> $GITHUB_OUTPUT
+            echo "color=good" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Pipeline Completion notification to Slack
+        continue-on-error: true
+        run: |
+          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            echo "⚠️  SLACK_WEBHOOK_URL secret not configured. Skipping Slack notification."
+            exit 0
+          fi
+          
+          # Calculate duration
+          START_TIME=$(date -d "${{ github.event.head_commit.timestamp }}" +%s 2>/dev/null || date +%s)
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          DURATION_MIN=$((DURATION / 60))
+          DURATION_SEC=$((DURATION % 60))
+          
+          # Build services status
+          SERVICES_STATUS=""
+          if [ "${{ needs.detect-changes.outputs.auth-service }}" == "true" ]; then
+            STATUS_EMOJI=$([ "${{ needs.build-auth-service.result }}" == "success" ] && echo ":white_check_mark:" || echo ":x:")
+            SERVICES_STATUS="${SERVICES_STATUS}${STATUS_EMOJI} *Auth Service:* ${{ needs.build-auth-service.result }}\n"
+          fi
+          if [ "${{ needs.detect-changes.outputs.task-service }}" == "true" ]; then
+            STATUS_EMOJI=$([ "${{ needs.build-task-service.result }}" == "success" ] && echo ":white_check_mark:" || echo ":x:")
+            SERVICES_STATUS="${SERVICES_STATUS}${STATUS_EMOJI} *Task Service:* ${{ needs.build-task-service.result }}\n"
+          fi
+          if [ "${{ needs.detect-changes.outputs.frontend }}" == "true" ]; then
+            STATUS_EMOJI=$([ "${{ needs.build-frontend.result }}" == "success" ] && echo ":white_check_mark:" || echo ":x:")
+            SERVICES_STATUS="${SERVICES_STATUS}${STATUS_EMOJI} *Frontend:* ${{ needs.build-frontend.result }}\n"
+          fi
+          if [ "${{ needs.detect-changes.outputs.nginx }}" == "true" ]; then
+            STATUS_EMOJI=$([ "${{ needs.build-nginx.result }}" == "success" ] && echo ":white_check_mark:" || echo ":x:")
+            SERVICES_STATUS="${SERVICES_STATUS}${STATUS_EMOJI} *Nginx:* ${{ needs.build-nginx.result }}\n"
+          fi
+          
+          # If no services were built
+          if [ -z "$SERVICES_STATUS" ]; then
+            SERVICES_STATUS="No services were built in this pipeline run."
+          fi
+          
+          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"blocks\": [
+                {
+                  \"type\": \"header\",
+                  \"text\": {
+                    \"type\": \"plain_text\",
+                    \"text\": \"${{ steps.status.outputs.status_icon }} Pipeline ${{ steps.status.outputs.status_text }}\",
+                    \"emoji\": true
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"Pipeline execution completed for *${{ github.repository }}*\"
+                  }
+                },
+                {
+                  \"type\": \"divider\"
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Build Results:*\n${SERVICES_STATUS}\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Status*\n${{ steps.status.outputs.status_text }}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Version*\n\`${{ needs.generate-version.outputs.version }}\`\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Duration*\n${DURATION_MIN}m ${DURATION_SEC}s\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Branch*\n\`${{ github.ref_name }}\`\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Triggered By*\n${{ github.actor }}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*K8s Update*\n${{ needs.update-k8s-manifests.result }}\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Commit:* <${{ github.event.repository.html_url }}/commit/${{ github.sha }}|\`${GITHUB_SHA:0:7}\`>\n*View Run:* <${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}|Click here>\"
+                  }
+                },
+                {
+                  \"type\": \"context\",
+                  \"elements\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"GitHub Actions • $(date -u +'%Y-%m-%d %H:%M:%S UTC')\"
+                    }
+                  ]
+                }
+              ]
+            }"
+          
+          echo "✅ Pipeline completion notification sent"
