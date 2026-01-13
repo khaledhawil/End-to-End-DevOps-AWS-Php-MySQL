@@ -943,7 +943,19 @@ jobs:
             COMMIT_MSG="${COMMIT_MSG}\nUpdated by GitHub Actions"
             
             echo -e "$COMMIT_MSG" | git commit -F -
-            git push
+            
+            # Pull with rebase to handle any remote changes, then push
+            echo "📥 Pulling latest changes from remote..."
+            git pull --rebase origin master || {
+              echo "⚠️  Rebase conflict detected, attempting to resolve..."
+              # If there's a conflict, prefer our changes (the manifest updates)
+              git checkout --ours k8s/
+              git add k8s/
+              git rebase --continue || true
+            }
+            
+            echo "📤 Pushing manifest updates..."
+            git push origin master
             echo "✅ K8s manifests updated and pushed"
           fi
 
