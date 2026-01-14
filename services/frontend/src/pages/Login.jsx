@@ -15,19 +15,29 @@ function Login({ setAuth, setUser }) {
     
     try {
       const response = await axios.post('/api/auth/login', formData)
+      console.log('Login response received:', response.data)
+      
+      // Store token
       localStorage.setItem('token', response.data.token)
-      setAuth(true)
+      
+      // Update user state first
       if (setUser) {
         setUser({
           userId: response.data.userId,
           username: response.data.username
         })
       }
-      console.log('Login successful:', response.data.username)
-      navigate('/dashboard')
+      
+      // Update auth state
+      setAuth(true)
+      
+      console.log('Login successful, navigating to dashboard:', response.data.username)
+      
+      // Navigate to dashboard
+      navigate('/dashboard', { replace: true })
     } catch (err) {
+      console.error('Login error:', err)
       setError(err.response?.data?.error || 'Login failed')
-    } finally {
       setLoading(false)
     }
   }
