@@ -22,7 +22,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth-service
-          image: khaledhawil/task-manager-auth:latest
+          image: khaledhawil/task-manager-task:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
