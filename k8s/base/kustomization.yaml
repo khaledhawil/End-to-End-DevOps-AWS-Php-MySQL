@@ -8,6 +8,7 @@ resources:
   - rbac.yaml
   - network-policy.yaml
   - pdb.yaml
+  - hpa.yaml
   - frontend-deployment.yaml
   - frontend-service.yaml
   - auth-service-deployment.yaml
