@@ -22,7 +22,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: users-service
-          image: khaledhawil/task-manager-auth:latest
+          image: khaledhawil/task-manager-task:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
@@ -33,7 +33,7 @@ spec:
               drop:
                 - ALL
           ports:
-            - containerPort: 80
+            - containerPort: 8000
               protocol: TCP
           resources:
             requests:
@@ -45,7 +45,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8001
+              port: 8000
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -53,7 +53,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 8001
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
