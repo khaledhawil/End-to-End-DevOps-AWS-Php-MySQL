@@ -1,0 +1,240 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: task-management-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  task-management-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Task Management System",
+        "uid": "tms-dashboard",
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 0,
+        "refresh": "30s",
+        "panels": [
+          {
+            "id": 1,
+            "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+            "type": "stat",
+            "title": "Frontend Pods",
+            "targets": [{
+              "expr": "count(kube_pod_status_phase{namespace=\"tms-app\",pod=~\"frontend.*\",phase=\"Running\"})",
+              "refId": "A"
+            }],
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": 0, "color": "red" },
+                    { "value": 1, "color": "green" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 2,
+            "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+            "type": "stat",
+            "title": "Auth Service Pods",
+            "targets": [{
+              "expr": "count(kube_pod_status_phase{namespace=\"tms-app\",pod=~\"auth-service.*\",phase=\"Running\"})",
+              "refId": "A"
+            }],
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": 0, "color": "red" },
+                    { "value": 1, "color": "green" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 3,
+            "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+            "type": "stat",
+            "title": "Task Service Pods",
+            "targets": [{
+              "expr": "count(kube_pod_status_phase{namespace=\"tms-app\",pod=~\"task-service.*\",phase=\"Running\"})",
+              "refId": "A"
+            }],
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": 0, "color": "red" },
+                    { "value": 1, "color": "green" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 4,
+            "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+            "type": "graph",
+            "title": "CPU Usage",
+            "targets": [
+              {
+                "expr": "rate(container_cpu_usage_seconds_total{namespace=\"tms-app\",pod=~\"frontend.*\"}[5m])",
+                "legendFormat": "Frontend - {{pod}}",
+                "refId": "A"
+              },
+              {
+                "expr": "rate(container_cpu_usage_seconds_total{namespace=\"tms-app\",pod=~\"auth-service.*\"}[5m])",
+                "legendFormat": "Auth - {{pod}}",
+                "refId": "B"
+              },
+              {
+                "expr": "rate(container_cpu_usage_seconds_total{namespace=\"tms-app\",pod=~\"task-service.*\"}[5m])",
+                "legendFormat": "Task - {{pod}}",
+                "refId": "C"
+              }
+            ],
+            "yaxes": [
+              { "format": "percentunit", "label": "CPU" },
+              { "format": "short" }
+            ]
+          },
+          {
+            "id": 5,
+            "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+            "type": "graph",
+            "title": "Memory Usage",
+            "targets": [
+              {
+                "expr": "container_memory_usage_bytes{namespace=\"tms-app\",pod=~\"frontend.*\"}",
+                "legendFormat": "Frontend - {{pod}}",
+                "refId": "A"
+              },
+              {
+                "expr": "container_memory_usage_bytes{namespace=\"tms-app\",pod=~\"auth-service.*\"}",
+                "legendFormat": "Auth - {{pod}}",
+                "refId": "B"
+              },
+              {
+                "expr": "container_memory_usage_bytes{namespace=\"tms-app\",pod=~\"task-service.*\"}",
+                "legendFormat": "Task - {{pod}}",
+                "refId": "C"
+              }
+            ],
+            "yaxes": [
+              { "format": "bytes", "label": "Memory" },
+              { "format": "short" }
+            ]
+          },
+          {
+            "id": 6,
+            "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+            "type": "table",
+            "title": "Pod Status",
+            "targets": [{
+              "expr": "kube_pod_info{namespace=\"tms-app\"}",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }],
+            "transformations": [
+              {
+                "id": "organize",
+                "options": {
+                  "excludeByName": {},
+                  "indexByName": {},
+                  "renameByName": {
+                    "pod": "Pod Name",
+                    "node": "Node",
+                    "pod_ip": "Pod IP"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": 7,
+            "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+            "type": "graph",
+            "title": "Network Received",
+            "targets": [
+              {
+                "expr": "rate(container_network_receive_bytes_total{namespace=\"tms-app\"}[5m])",
+                "legendFormat": "{{pod}}",
+                "refId": "A"
+              }
+            ],
+            "yaxes": [
+              { "format": "Bps", "label": "Bytes/sec" },
+              { "format": "short" }
+            ]
+          },
+          {
+            "id": 8,
+            "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+            "type": "graph",
+            "title": "Network Transmitted",
+            "targets": [
+              {
+                "expr": "rate(container_network_transmit_bytes_total{namespace=\"tms-app\"}[5m])",
+                "legendFormat": "{{pod}}",
+                "refId": "A"
+              }
+            ],
+            "yaxes": [
+              { "format": "Bps", "label": "Bytes/sec" },
+              { "format": "short" }
+            ]
+          },
+          {
+            "id": 9,
+            "gridPos": { "x": 0, "y": 32, "w": 8, "h": 8 },
+            "type": "stat",
+            "title": "Pod Restarts (Last Hour)",
+            "targets": [{
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"tms-app\"}[1h]))",
+              "refId": "A"
+            }],
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": 0, "color": "green" },
+                    { "value": 1, "color": "yellow" },
+                    { "value": 5, "color": "red" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 10,
+            "gridPos": { "x": 8, "y": 32, "w": 8, "h": 8 },
+            "type": "stat",
+            "title": "Total Pods",
+            "targets": [{
+              "expr": "count(kube_pod_info{namespace=\"tms-app\"})",
+              "refId": "A"
+            }]
+          },
+          {
+            "id": 11,
+            "gridPos": { "x": 16, "y": 32, "w": 8, "h": 8 },
+            "type": "stat",
+            "title": "HPA Current Replicas",
+            "targets": [{
+              "expr": "sum(kube_horizontalpodautoscaler_status_current_replicas{namespace=\"tms-app\"})",
+              "refId": "A"
+            }]
+          }
+        ]
+      }
+    }

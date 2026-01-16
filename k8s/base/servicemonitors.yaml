@@ -1,8 +1,9 @@
 ---
-apiVersion: v1
-kind: ServiceMonitor
+# PodMonitors for application services - tracks pod-level metrics
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
 metadata:
-  name: auth-service-monitor
+  name: auth-service-podmonitor
   namespace: tms-app
   labels:
     app: auth-service
@@ -11,16 +12,16 @@ spec:
   selector:
     matchLabels:
       app: auth-service
-  endpoints:
+  podMetricsEndpoints:
     - port: http
       path: /metrics
       interval: 30s
 
 ---
-apiVersion: v1
-kind: ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
 metadata:
-  name: task-service-monitor
+  name: task-service-podmonitor
   namespace: tms-app
   labels:
     app: task-service
@@ -29,16 +30,16 @@ spec:
   selector:
     matchLabels:
       app: task-service
-  endpoints:
+  podMetricsEndpoints:
     - port: http
       path: /metrics
       interval: 30s
 
 ---
-apiVersion: v1
-kind: ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
 metadata:
-  name: frontend-monitor
+  name: frontend-podmonitor
   namespace: tms-app
   labels:
     app: frontend
@@ -47,7 +48,7 @@ spec:
   selector:
     matchLabels:
       app: frontend
-  endpoints:
+  podMetricsEndpoints:
     - port: http
       path: /metrics
       interval: 30s
