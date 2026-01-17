@@ -69,8 +69,8 @@ This project implements a complete cloud-native task management application with
       +-----------+-----------+                                 |
       |           |           |                                 |
       v           v           v                                 |
-   Build      Trivy       Push to                              |
-   Images     Scan       Docker Hub                            |
+   Build      Trivy       Push to                               |
+   Images     Scan       Docker Hub                             |
       |           |           |                                 |
       +-----------+-----------+                                 |
                   |                                             |
